@@ -1,0 +1,156 @@
+clc, clear all
+%% Parameters
+mod_type = 2;                     %1 - BPSK, 2 - QPSK, 4 - 16QAM, 6 - 64QAM, 8 - 256QAM
+symbol_size = 128;
+%data_size = symbol_size*mod_type;
+%gi_size = fft_size/4; % Guard interval (GI
+
+fft_size = 128; % 160MHz
+gi_size = fft_size/4; % Guard interval (GI)
+data_size = fft_size*mod_type;
+%mod = 2;
+%data_size = fft_size*mod;
+
+M = 2;     % BS ant.
+N = 512;    % RIS ele.
+N1 = 32;     % RIS x-axis
+N2 = N/N1;  % RIS y-axis
+% N1=16;
+% N2=16;
+% N=N1*N2;
+U = 2;      % User
+RA = 1;     % RX ant.
+S = U*RA;   % Data stream
+L1 = 2;     % BS-RIS paths
+L2 = 4;     % RIS-UE paths
+L3 = 2;     % BS-UE paths
+d_ant = 0.5;    % antenna distance
+d_ele = 0.5;    % RIS ele. distance
+DR = 1;         % direct path (with -> 1, without -> 0)
+snr = 30;
+iter = 10;
+grid_bit = 10;
+aod_grid = 10;
+
+%% feedback parameters
+MODE = 1;                           % 1:    2:    3:
+gt = 2^aod_grid;                                 % AoD grid
+gr = 2^aod_grid;                                 % AoA grid
+%[at,ar] = CB_gene(gt,gr,M,N,MODE);   % codebook gene.
+%% sim.
+
+if mod_type == 2
+    normf = 2;      %2/3(M-1)
+    Mod_Constellation = [1-1j;1+1j;-1+1j;-1-1j]/sqrt(normf); % QPSK Constallation points which represents 2 bits one symbol
+    NumClass = numel(Mod_Constellation)^M;
+    symseq=de2bi(0:numel(Mod_Constellation)^M-1,'left-msb');
+    sym_ref = base_mod(symseq,mod_type).';
+    Label = 1:NumClass; % Random labels for QPSK symbols
+elseif mod_type == 4
+    normf = 10;
+    Mod_Constellation = [3-3j,3-1j,3+1j,3+3j,1+3j,1+1j,1-1j,1-3j,-1-3j,-1-1j,-1+1j,-1+3j,-3+3j,-3+1j,-3-1j,-3-3j]/sqrt(normf);
+    NumClass = numel(Mod_Constellation)^M;
+    symseq=de2bi(0:numel(Mod_Constellation)^M-1,'left-msb');
+    sym_ref = base_mod(symseq,mod_type).';
+    Label = 1:NumClass; % Random labels for 16QAM symbols
+elseif mod_type == 1
+    normf = 2;
+    Mod_Constellation = [1-1j;1+1j]/sqrt(normf); % BPSK Constallation points which represents 1 bit one symbol
+    NumClass = numel(Mod_Constellation)^M;
+    symseq=de2bi(0:numel(Mod_Constellation)^M-1,'left-msb');
+    sym_ref = base_mod(symseq,mod_type).';
+    Label = 1:NumClass; % Random labels for QPSK symbols
+elseif mod_type==6
+    normf = 42;
+    Mod_constallation = [-7+7j,-7+5j,-7+1j,-7+3j,-7-7j,-7-5j,-7-1j,-7-3j,-5+7j,-5+5j,-5+1j,-5+3j, -5-7j,-5-5j,-5-1j,-5-3j,...
+    -1+7j,-1+5j,-1+1j,-1+3j,-1-7j,-1-5j,-1-1j,-1-3j,-3+7j,-3+5j,-3+1j,-3+3j,-3-7j,-3-5j,-3-1j,-3-3j,7+7j,7+5j,7+1j,7+3j,...
+    7-7j,7-5j,7-1j,7-3j,5+7j,5+5j,5+1j,5+3j,5-7j,5-5j,5-1j,5-3j,1+7j,1+5j,1+1j,1+3j,1-7j,1-5j,1-1j,1-3j,3+7j,3+5j,3+1j,3+3j,...
+    3-7j,3-5j,3-1j,3-3j]/sqtr(normf); % 64 Constallation points which represents 6 bits one symbol
+    NumClass = numel(Mod_Constellation)^M;
+    symseq=de2bi(0:numel(Mod_Constellation)^M-1,'left-msb');
+    sym_ref = base_mod(symseq,mod_type).';
+    
+end
+
+% %Mod_constallation_64 = [-7+7j,-7+5j,-7+1j,-7+3j,-7-7j,-7-5j,-7-1j,-7-3j,-5+7j,-5+5j,-5+1j,-5+3j, -5-7j,-5-5j,-5-1j,-5-3j,...
+%     -1+7j,-1+5j,-1+1j,-1+3j,-1-7j,-1-5j,-1-1j,-1-3j,-3+7j,-3+5j,-3+1j,-3+3j,-3-7j,-3-5j,-3-1j,-3-3j,7+7j,7+5j,7+1j,7+3j,...
+%     7-7j,7-5j,7-1j,7-3j,5+7j,5+5j,5+1j,5+3j,5-7j,5-5j,5-1j,5-3j,1+7j,1+5j,1+1j,1+3j,1-7j,1-5j,1-1j,1-3j,3+7j,3+5j,3+1j,3+3j,...
+%     3-7j,3-5j,3-1j,3-3j];
+
+%%
+class = 1;
+D_temp_ = [];
+L_temp_ = [];
+
+for i = 1:iter
+  %  tic
+   % for snr_i = 1:length(snr)
+       %% data gene.
+        data = randi([0 1], S, data_size);
+        sym = base_mod(data, mod_type);
+        sym_lb = zeros(1,size(sym,2));
+        for c = 1:NumClass % For data labeling
+            idx_temp = find(sum(sym==sym_ref(:,c))==M);
+            sym_lb(idx_temp) = c; % Symbol label
+        end
+        
+        ifftdata = ifft(sym,fft_size,2)*sqrt(fft_size);
+        cpdata = [ifftdata(:,fft_size - gi_size+1 : fft_size,:) ifftdata];
+
+        %% channel gene.
+        [H_CA,B_C,A,grid_,ang_info_rx,ang_info_tx,G] = RIS_channel_gene_v3(M,N,N1,N2,L1,L2,U,d_ant,d_ele,gt);  % RIS-UE channel
+        H_D = channel_gene(M,U,L3,d_ant);  % BS-UE channel (BS : ULA)
+        %% RIS ele. phase
+        theta = Phase_cal(H_CA, N, U);
+        H_T = RIS_Change_Cascaded_to_Total_channel(H_CA,H_D,theta,DR);                   % total channel (BS-RIS-UE + BS-UE)
+       %% precoding (ZF) RIS
+        H_T = H_T';
+        gamma = trace(inv(H_T*H_T'));         
+        G = (H_T'*inv(H_T*H_T'))./sqrt(gamma);
+        H = fft(H_T,fft_size,2);
+       % X = G * sym;
+        X_ =G*cpdata;
+        [Y,No] = awgn_noise(H_T * X_,snr);
+        Y = Y.*sqrt(gamma);
+        cpremove = Y(:,gi_size+1:gi_size+fft_size);
+        y = fft(cpremove,fft_size,2) / sqrt(fft_size);
+        %Y_demod = base_demod(y,mod_type);
+        %num_error_RIS(i,snr_i)=biterr(data,Y_demod);
+        D_temp = [real(y);imag(y);real(H);imag(H)];
+        D_temp_ = [D_temp_ D_temp];
+        L_temp_ = [L_temp_ sym_lb];
+
+   %  end
+    %toc
+end
+
+
+D = mat2cell(D_temp_,[size(D_temp_,1)],ones(1,size(D_temp_,2)));
+D = D.';
+L = L_temp_.';
+
+TrainSize = 4/5;
+ValidSize = 1/5;
+numsample = fft_size*iter;
+Dtrain = D(1:numsample*TrainSize);
+Ltrain = categorical(L(1:numsample*TrainSize));
+
+Dvalid = D(numsample*TrainSize+1:end);
+Lvalid = categorical(L(numsample*TrainSize+1:end));
+%save('data_1.mat','D1');
+%save('data_2.mat','L');
+save('train_data_qpsk_10000.mat','Dtrain','Ltrain','Dvalid','Lvalid')
+
+% ber_RIS=(sum(num_error_RIS,1)/(data_size*M))/iter;
+% figure(1)
+% semilogy(snr,ber_RIS)
+% axis([0 30 1e-3 0.5])
+% hold on
+
+% % ber=(sum(num_error_,1)/(data_size*M))/iter;
+% % semilogy(snr,ber,'k-o')
+% 
+% title('BER Performance'), xlabel('SNR(dB)'),ylabel('BER'),legend('RIS-128','ZF-128','RIS-64','ZF-64')
+% grid on
+% 
+% hold on
