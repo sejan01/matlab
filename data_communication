@@ -1,0 +1,200 @@
+clc, clear all
+
+%% Parameters
+mod_type = 2;                     %1 - BPSK, 2 - QPSK, 4 - 16QAM, 6 - 64QAM, 8 - 256QAM
+symbol_size = 128;
+%data_size = symbol_size*mod_type;
+%gi_size = fft_size/4; % Guard interval (GI
+
+fft_size = 128; % 160MHz
+gi_size = fft_size/4; % Guard interval (GI)
+data_size = fft_size*mod_type;
+%mod = 2;
+%data_size = fft_size*mod;
+n_e = [];
+
+SNR = 0:5:30;
+%iter =500;
+load('TrainedNet_qpsk2.mat');
+
+
+M = 2;     % BS ant.
+N = 512;    % RIS ele.
+N1 = 32;     % RIS x-axis
+N2 = N/N1;  % RIS y-axis
+% N1=16;
+% N2=16;
+% N=N1*N2;
+U = 2;      % User
+RA = 1;     % RX ant.
+S = U*RA;   % Data stream
+L1 = 2;     % BS-RIS paths
+L2 = 4;     % RIS-UE paths
+L3 = 2;     % BS-UE paths
+d_ant = 0.5;    % antenna distance
+d_ele = 0.5;    % RIS ele. distance
+DR = 1;         % direct path (with -> 1, without -> 0)
+%snr = 25;
+iter = 1000;
+grid_bit = 10;
+aod_grid = 10;
+re_sym=[];
+tr_sym=[];
+np=[];
+num_error_RIS1=[];
+%% feedback parameters
+MODE = 1;                           % 1:    2:    3:
+gt = 2^aod_grid;                                 % AoD grid
+gr = 2^aod_grid;                                 % AoA grid
+%[at,ar] = CB_gene(gt,gr,M,N,MODE);   % codebook gene.
+%% sim.
+
+if mod_type == 2
+    normf = 2;
+    Mod_Constellation = [1-1j;1+1j;-1+1j;-1-1j]/sqrt(normf); % QPSK Constallation points which represents 2 bits one symbol
+    NumClass = numel(Mod_Constellation)^M;
+    symseq=de2bi(0:numel(Mod_Constellation)^M-1,'left-msb');
+    sym_ref = base_mod(symseq,mod_type).';
+    Label = 1:NumClass; % Random labels for QPSK symbols
+elseif mod_type == 4
+    normf = 10;
+    Mod_Constellation = [3-3j,3-1j,3+1j,3+3j,1+3j,1+1j,1-1j,1-3j,-1-3j,-1-1j,-1+1j,-1+3j,-3+3j,-3+1j,-3-1j,-3-3j]/sqrt(normf);
+    NumClass = numel(Mod_Constellation)^M;
+    symseq=de2bi(0:numel(Mod_Constellation)^M-1,'left-msb');
+    sym_ref = base_mod(symseq,mod_type).';
+    Label = 1:NumClass; % Random labels for 16QAM symbols
+elseif mod_type == 1
+    normf = 2;
+    Mod_Constellation = [1-1j;1+1j]/sqrt(normf); % QPSK Constallation points which represents 2 bits one symbol
+    NumClass = numel(Mod_Constellation)^M;
+    symseq=de2bi(0:numel(Mod_Constellation)^M-1,'left-msb');
+    sym_ref = base_mod(symseq,mod_type).';
+    Label = 1:NumClass; % Random labels for QPSK symbols
+    
+end
+%%
+class = 1;
+D_temp_ = [];
+L_temp_ = [];
+sym_ = [];
+data_ = [];
+nErr=[];
+for s = 1:length(SNR)
+    for j = 1:iter
+  %  tic
+   % for snr_i = 1:length(snr)
+       %% data gene.
+        data = randi([0 1], S, data_size);
+        sym = base_mod(data, mod_type);
+        sym_lb = zeros(1,size(sym,2));
+        for c = 1:NumClass % For data labeling
+            idx_temp = find(sum(sym==sym_ref(:,c))==M);
+            sym_lb(idx_temp) = c; % Symbol label
+        end
+        
+        ifftdata = ifft(sym,fft_size,2)*sqrt(fft_size);
+        cpdata = [ifftdata(:,fft_size - gi_size+1 : fft_size,:) ifftdata];
+
+        %% channel gene.
+        [H_CA,B_C,A,grid_,ang_info_rx,ang_info_tx,G] = RIS_channel_gene_v3(M,N,N1,N2,L1,L2,U,d_ant,d_ele,gt);  % RIS-UE channel
+        H_D = channel_gene(M,U,L3,d_ant);  % BS-UE channel (BS : ULA)
+        %% RIS ele. phase
+        theta = Phase_cal(H_CA, N, U);
+        H_T = RIS_Change_Cascaded_to_Total_channel(H_CA,H_D,theta,DR);                   % total channel (BS-RIS-UE + BS-UE)
+       %% precoding (ZF) RIS
+        H_T = H_T';
+        gamma = trace(inv(H_T*H_T'));         
+        G = (H_T'*inv(H_T*H_T'))./sqrt(gamma);
+        H = fft(H_T,fft_size,2);
+       % X = G * sym;
+        X_ =G*cpdata;
+        [Y,No] = awgn_noise(H_T * X_,SNR(s));
+        Y = Y.*sqrt(gamma);
+%         %% precoding (ZF) without RIS
+%         H_D = H_D';
+%         gamma = trace(inv(H_D*H_D'));
+%         G = (H_D'*inv(H_D*H_D'))./sqrt(gamma);
+%         X = G * sym;
+%         [Y,No] = awgn_noise(H_D * X,snr(snr_i));
+%         Y = Y.*sqrt(gamma);
+%         Y_demod_H_D = base_demod(Y,mod_type);
+%%
+        cpremove = Y(:,gi_size+1:gi_size+fft_size);
+        y = fft(cpremove,fft_size,2) / sqrt(fft_size);
+        
+        %tr_sym=[tr_sym sym];
+        %re_sym = [re_sym y];
+        y_re = real(y); % real
+        y_im = imag(y); % imaginary
+        for i=1:2
+            for h=1:128
+                t(h)=y(i,h);
+                t_re_1 = real(t);
+                t_im_1 = imag(t);
+                
+            end
+            new_val(i,find(t_re_1 < 0 & t_im_1 < 0)) = Mod_Constellation(4);
+            new_val(i,find(t_re_1 >= 0 & t_im_1 > 0)) = Mod_Constellation(2);
+            new_val(i,find(t_re_1 < 0 & t_im_1 >= 0)) = Mod_Constellation(3);
+            new_val(i,find(t_re_1 >= 0 & t_im_1 < 0)) = Mod_Constellation(1);
+        end
+       % nErr(i) = size(find([sym- new_val]),1); % couting the number of errors
+        q = find([sym- new_val]);
+        err_1 = size(q)/128;
+        q1 = size(q);
+        np = [np q1(2)];
+        Y_demod = base_demod(y,mod_type);
+        num_error_RIS(j,s)=biterr(data,Y_demod);
+        num_err_1(j)= err_1(1);
+        %new_val=0;
+
+    end
+
+    ser_error(s) = sum(num_err_1)/iter;
+
+end
+
+simSer_QPSK = ser_error/iter;
+ber_RIS=(sum(num_error_RIS,1)/(data_size*M))/iter;
+%ber_1=(sum(num_error_,1)/(data_size*M))/iter;
+%num_error_ =sum(num_error,2)/(iter*fft_size);
+semilogy(SNR,ser_error,'-o');
+hold on;
+semilogy(SNR,ber_RIS,'-*')
+ylabel('BER')
+xlabel('SNR')
+grid on
+hold on
+
+% k=figure;
+% semilogy(SNR,ser_,'-o')
+% ylabel('SER')
+% xlabel('SNR')
+% grid on
+% saveas(k,'myfile000.png')
+% hold on
+% 
+% h=figure;
+% semilogy(SNR,ber,'-*');hold on; grid on
+%semilogy(SNR,ber_IRS,'-b');hold on; grid on
+%semilogy(SNR,ber_,'->');hold on; grid on
+
+% ber_RIS=(sum(num_error_RIS,1)/(data_size*M))/iter;
+% %figure(1)
+% semilogy(SNR,ber_RIS,'->')
+% ylabel('BER')
+% xlabel('SNR')
+% %grid on
+% saveas(h,'myfile111.png')
+% hold on
+
+% axis([0 30 1e-3 0.5])
+% hold on
+
+% % ber=(sum(num_error_,1)/(data_size*M))/iter;
+% % semilogy(snr,ber,'k-o')
+% 
+% title('BER Performance'), xlabel('SNR(dB)'),ylabel('BER'),legend('RIS-128','ZF-128','RIS-64','ZF-64')
+% grid on
+% 
+% hold on
